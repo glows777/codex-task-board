@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="board-mode" content="__MODE__" />
+  <title>Codex 任务看板</title>
+  <style>__STYLES__</style>
+</head>
+<body>
+  <a class="skip" href="#board">跳到任务看板</a>
+  <div class="app">
+    <div class="toolbar">
+      <nav class="views" aria-label="面板视图"><button id="view-board" type="button" aria-pressed="true">看板</button><button id="view-todo" type="button" aria-pressed="false">Todo</button></nav>
+      <span id="preview" class="preview" hidden>开发预览</span>
+      <div class="board-controls" id="board-toolbar">
+      <label class="search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="搜索任务或活动…" aria-label="搜索任务或活动" autocomplete="off" /></label>
+      <select id="project" aria-label="筛选项目"><option value="">所有项目</option></select>
+      <span class="toolbar-space"></span>
+      <span id="connection" class="connection" role="status">正在连接</span>
+      <label class="auto"><input id="auto" type="checkbox" checked />自动更新</label>
+      <button id="refresh" class="control" type="button" aria-label="刷新看板"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M18 17a7 7 0 0 1-12 1l-2-3"/></svg><span>刷新</span></button>
+      </div>
+    </div>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div class="layout" id="layout">
+      <main id="board" class="board" tabindex="-1" aria-label="任务状态看板"></main>
+      <section id="todo" class="todo" aria-labelledby="todo-title" hidden>
+        <div class="todo-head"><h2 id="todo-title">Todo</h2><span id="todo-status" role="status">正在读取…</span></div>
+        <div id="todo-editor"></div>
+      </section>
+    </div>
+  </div>
+  <script type="module">__SCRIPT__</script>
+</body>
+</html>

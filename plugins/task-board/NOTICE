@@ -1,0 +1,7 @@
+The dashboard palette, spacing, and board/card styling are adapted from Better Codex.
+Upstream: https://github.com/Ericwong5021/better-codex
+Reference revision: 60f179c93db146f67c55d51dfbe084159235d81b
+License: Apache License, Version 2.0 (see BETTER-CODEX-LICENSE).
+
+Adapted portions: src/ui/styles.css (palette, spacing, board and card treatment).
+The task collection and MCP App implementation are developed separately using the official SDKs.

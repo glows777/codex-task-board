@@ -1,0 +1,17 @@
+{
+  "name": "task-board",
+  "version": "0.1.0",
+  "description": "通过官方 hooks 查看 Codex 对话的运行、批准、异常与本轮结束状态。",
+  "mcpServers": "./.mcp.json",
+  "hooks": "./hooks/hooks.json",
+  "interface": {
+    "displayName": "任务看板",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png",
+    "shortDescription": "一眼查看 Codex 任务状态",
+    "longDescription": "本地任务看板，显示接入后的任务活动。",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": ["打开任务看板。"]
+  }
+}

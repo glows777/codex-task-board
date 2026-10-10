@@ -1,0 +1,256 @@
+import { chromium, expect } from "playwright/test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Store } from "../src/store.ts";
+import { readTodo } from "../src/todo.ts";
+
+const root = new URL("../", import.meta.url).pathname;
+const data = mkdtempSync(join(tmpdir(), "task-board-browser-"));
+const env = { ...process.env, TASK_BOARD_DATA_DIR: data };
+async function hook(id: string, name: string, extra: Record<string, unknown> = {}) {
+  const child = Bun.spawn([process.execPath, join(root, "plugins/task-board/dist/hook.js")], { env, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+  child.stdin.write(JSON.stringify({ session_id: id, turn_id: "browser-turn", hook_event_name: name, cwd: "/projects/dashboard", tool_name: "Bash", tool_input: {}, ...extra }));
+  child.stdin.end();
+  const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  if (code || stderr || stdout.trim() !== "{}") throw new Error(`Hook failed: ${stderr}`);
+}
+const seeds = [
+  { id: "demo-running", title: "演示：实现 Codex 侧边栏入口", event: "PreToolUse" },
+  { id: "demo-approval", title: "演示：构建并安装插件", event: "PermissionRequest" },
+  { id: "demo-error", title: "演示：排查测试失败", event: "PostToolUse" },
+  { id: "demo-ended", title: "演示：核对官方插件文档", event: "Stop" },
+  { id: "demo-interrupt", title: "演示：已中断的任务", event: "Interrupt" },
+];
+for (const seed of seeds) {
+  const cwd = seed.id === "demo-ended" ? "/projects/docs" : "/projects/dashboard";
+  await hook(seed.id, "UserPromptSubmit", { cwd, prompt: seed.title });
+  await hook(seed.id, seed.event, { cwd, tool_input: { description: "等待批准安装本地插件" }, tool_response: { isError: seed.id === "demo-error" }, last_assistant_message: "演示：本轮回复已结束" });
+}
+const client = new Client({ name: "browser-check", version: "1" });
+const transport = new StdioClientTransport({ command: process.execPath, args: [join(root, "plugins/task-board/dist/server.js")], env: Object.fromEntries(Object.entries(env).filter((entry): entry is [string,string] => typeof entry[1] === "string")) });
+await client.connect(transport);
+const build = await Bun.build({ entrypoints: [join(root, "tests/browser-host.ts")], target: "browser", minify: true });
+if (!build.success) throw new AggregateError(build.logs);
+const hostScript = await build.outputs[0].text();
+const appHtml = await Bun.file(join(root, "plugins/task-board/dist/dashboard.html")).text();
+const store = new Store(data);
+let offline = false;
+let delayNextSave = false, saveStarted = 0;
+let releaseSave: (() => void) | undefined;
+const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
+  const url = new URL(request.url);
+  if (url.pathname === "/") return new Response('<!doctype html><html><head><title>官方 SDK 测试宿主 · 演示数据</title></head><body style="margin:0"><button id="dark" style="position:fixed;bottom:0;right:0;z-index:10">测试深色主题</button><iframe title="任务看板" style="border:0;width:100vw;height:100dvh"></iframe><script type="module" src="/host.js"></script></body></html>', { headers: { "Content-Type": "text/html" } });
+  if (url.pathname === "/host.js") return new Response(hostScript, { headers: { "Content-Type": "text/javascript" } });
+  if (url.pathname === "/app") return new Response(appHtml, { headers: { "Content-Type": "text/html" } });
+  if (url.pathname === "/preview") return new Response(appHtml.replace('content="app"', 'content="preview"'), { headers: { "Content-Type": "text/html" } });
+  if (offline && (url.pathname === "/rpc" || url.pathname.startsWith("/api/"))) return new Response("Offline test", { status: 503 });
+  if (url.pathname === "/rpc" && request.method === "POST") {
+    const params = await request.json();
+    if (params.name === "todo_save") {
+      saveStarted++;
+      if (delayNextSave) { delayNextSave = false; await new Promise<void>(resolve => { releaseSave = resolve; }); }
+    }
+    return Response.json(await client.callTool(params));
+  }
+  if (url.pathname === "/api/snapshot") return Response.json(store.snapshot());
+  if (url.pathname === "/api/todo") return Response.json({ markdown: readTodo(data) });
+  if (url.pathname.startsWith("/api/task/")) { const id = decodeURIComponent(url.pathname.slice(10)); return Response.json({ task: store.task(id), activities: store.activities(id) }); }
+  return new Response("Not found", { status: 404 });
+} });
+const browser = await chromium.launch({ channel: "chrome", headless: true });
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+const errors: string[] = [];
+page.on("pageerror", error => errors.push(error.message));
+page.on("dialog", async dialog => { errors.push("Unexpected dialog"); await dialog.dismiss(); });
+mkdirSync(join(root, "test-results"), { recursive: true });
+try {
+  await page.goto(server.url.toString());
+  const frame = page.frameLocator("iframe");
+  await expect(frame.locator(".card")).toHaveCount(5);
+  await expect(frame.locator("header, footer")).toHaveCount(0);
+  await expect(frame.locator("#view-board")).toBeVisible();
+  await expect(frame.locator("#view-todo")).toBeVisible();
+  await expect(page.locator("html")).toHaveAttribute("data-initialized", "true");
+  await expect(frame.locator('.column[data-status="approval"] .card')).toHaveCount(1);
+  await expect(frame.locator('.column[data-status="error"] .card')).toHaveCount(2);
+  await page.screenshot({ path: join(root, "test-results/board-desktop.png"), style: "#dark { visibility:hidden }" });
+  await hook("demo-xss", "UserPromptSubmit", { prompt: '<img src=x onerror="alert(1)"> 演示：按原文显示' });
+  await hook("demo-xss", "Stop");
+  await frame.locator("#refresh").click();
+  await expect(frame.locator(".card")).toHaveCount(6);
+  await expect(frame.locator(".card img")).toHaveCount(0);
+  await frame.locator("#search").fill("侧边栏");
+  await expect(frame.locator(".card")).toHaveCount(1);
+  await frame.locator("#search").fill("");
+  await frame.locator("#project").selectOption("/projects/docs");
+  await expect(frame.locator(".card")).toHaveCount(1);
+  await frame.locator("#project").selectOption("");
+  await frame.locator('[data-task="demo-approval"]').click();
+  await expect(page.locator("html")).toHaveAttribute("data-opened-url", "codex://threads/demo-approval");
+  await expect(frame.locator("#detail")).toHaveCount(0);
+  await page.evaluate(() => { document.documentElement.dataset.denyOpen = "true"; });
+  await frame.locator('[data-task="demo-ended"]').press("Enter");
+  await expect(frame.locator("#notice")).toContainText("无法打开聊天");
+  await page.evaluate(() => { document.documentElement.dataset.denyOpen = "false"; });
+  await frame.locator('[data-task="demo-ended"]').press("Enter");
+  await expect(page.locator("html")).toHaveAttribute("data-opened-url", "codex://threads/demo-ended");
+  await expect(frame.locator("#notice")).toBeHidden();
+  // Real UI → AppBridge → stdio MCP → todo.md, including failure and reload.
+  await frame.locator("#view-todo").click();
+  const doc = frame.locator("#todo-editor .ProseMirror.todo-document");
+  const pasteMarkdown = async (text: string) => {
+    await doc.locator(".bn-inline-content").first().click(); await doc.press("ControlOrMeta+a"); await doc.press("ControlOrMeta+a");
+    await doc.evaluate((node, value) => {
+      const data = new DataTransfer(); data.setData("text/plain", value); data.setData("text/markdown", value);
+      node.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+    }, text);
+  };
+  const replaceText = async (text: string) => {
+    await doc.click(); await doc.press("ControlOrMeta+a"); await doc.press("ControlOrMeta+a");
+    await doc.press("Backspace"); await doc.press("ControlOrMeta+Alt+0");
+    await doc.pressSequentially(text);
+  };
+  await expect(doc).toBeEditable();
+  await expect(frame.locator("html")).toHaveCSS("background-color", "rgb(245, 243, 237)");
+  await expect(doc).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(doc).toHaveCSS("color", "rgb(36, 36, 36)");
+  await expect(doc).toHaveCSS("border-radius", "0px");
+  await doc.focus();
+  await expect(doc).toBeFocused();
+  await expect(doc).toHaveCSS("outline-style", "none");
+  await page.screenshot({ path: join(root, "test-results/todo-empty-light.png"), style: "#dark { visibility:hidden }" });
+  await page.locator("#dark").click();
+  await expect(frame.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(frame.locator("html")).toHaveCSS("background-color", "rgb(33, 33, 33)");
+  await expect(doc).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(doc).toHaveCSS("color", "rgb(236, 236, 236)");
+  await expect(doc).toBeEditable();
+  await doc.focus();
+  await expect(doc).toHaveCSS("outline-style", "none");
+  await page.screenshot({ path: join(root, "test-results/todo-empty-dark.png"), style: "#dark { visibility:hidden }" });
+  await page.locator("#dark").click();
+  await expect(frame.locator("html")).toHaveCSS("background-color", "rgb(245, 243, 237)");
+  await expect(frame.locator("#todo-editor [contenteditable='true']")).toHaveCount(1);
+  await expect(frame.locator("#todo-source, #todo-preview, #todo-edit, #todo-save")).toHaveCount(0);
+  await expect(doc).toHaveText("");
+  await doc.pressSequentially("/heading2");
+  await expect(frame.getByRole("listbox")).toBeVisible();
+  await frame.getByRole("option", { name: /^二级标题/ }).click();
+  await expect(doc.locator("h2")).toBeVisible();
+  await replaceText("");
+  await doc.pressSequentially("## ");
+  await doc.pressSequentially("Inline heading");
+  await expect(doc.locator("h2")).toHaveText("Inline heading");
+  await expect(frame.locator("#todo-status")).toHaveText("已保存");
+  expect(readTodo(data).trim()).toBe("## Inline heading");
+  await doc.press("ControlOrMeta+a"); await doc.press("Backspace");
+  await doc.press("ControlOrMeta+Alt+0");
+  await expect.poll(() => readTodo(data).trim()).toBe("");
+  const note = "## 演示：今天要做的事\n\n- [ ] 写下下一步\n- [x] 记录已完成的事\n\n**备注**：只用 Markdown。\n\n`bun run test`\n\n[文档](https://example.com/docs)\n\n| 事项 | 状态 |\n| --- | --- |\n| 验证编辑器 | 完成 |\n\n```ts\nconst todo = true;\n```";
+  offline = true;
+  await pasteMarkdown(note + '\n\n<img src=x onerror="alert(1)"><script>alert(1)</script>\n\n[危险链接](javascript:alert(1))');
+  await expect(frame.locator("#todo-editor h2")).toHaveText("演示：今天要做的事");
+  await expect(frame.locator('#todo-editor input[type="checkbox"]')).toHaveCount(2);
+  await expect(frame.locator('#todo-editor input[type="checkbox"]').nth(1)).toBeChecked();
+  await expect(doc.locator("table")).toContainText("验证编辑器");
+  await expect(doc.locator("pre")).toContainText("const todo = true;");
+  await expect(frame.locator("#todo-editor script, #todo-editor [onerror], #todo-editor a[href^='javascript:']")).toHaveCount(0);
+  await pasteMarkdown(note);
+  await expect(frame.locator('#todo-editor input[type="checkbox"]')).toHaveCount(2);
+  await expect(frame.locator("#todo-status")).toContainText("保存失败，草稿保留");
+  await expect(doc.locator("h2")).toHaveText("演示：今天要做的事");
+  expect(readTodo(data).trim()).toBe("");
+  offline = false;
+  await frame.locator("#todo-title").click();
+  await expect(frame.locator("#todo-status")).toHaveText("已保存");
+  const savedNote = readTodo(data);
+  expect(savedNote).toContain("## 演示：今天要做的事");
+  expect(savedNote).toMatch(/[*-] \[ \] 写下下一步/);
+  expect(savedNote).toContain("验证编辑器");
+  expect(savedNote).toContain("```ts");
+  await expect(doc).toBeEditable();
+  // A delayed save must not lock typing or let overlapping writes lose newer text.
+  const savesBefore = saveStarted;
+  delayNextSave = true;
+  await replaceText("第一次输入");
+  await expect.poll(() => typeof releaseSave).toBe("function");
+  await expect(doc).toBeEditable();
+  await replaceText("第二次输入");
+  await page.waitForTimeout(650);
+  expect(saveStarted).toBe(savesBefore + 1);
+  releaseSave!(); releaseSave = undefined;
+  await expect(frame.locator("#todo-status")).toHaveText("已保存");
+  expect(readTodo(data).trim()).toBe("第二次输入");
+  // Chinese composition is saved only after compositionend.
+  await doc.dispatchEvent("compositionstart");
+  await replaceText("中文输入中");
+  await page.waitForTimeout(650);
+  expect(readTodo(data).trim()).toBe("第二次输入");
+  await doc.dispatchEvent("compositionend");
+  await expect.poll(() => readTodo(data).trim()).toBe("中文输入中");
+  await replaceText("");
+  await expect.poll(() => readTodo(data).trim()).toBe("");
+  await pasteMarkdown(note);
+  await frame.locator("#view-board").click();
+  await expect.poll(() => readTodo(data)).toBe(savedNote);
+  await frame.locator("#view-todo").click();
+  await frame.locator("#todo-editor a").click({ modifiers: ["ControlOrMeta"] });
+  await expect(page.locator("html")).toHaveAttribute("data-opened-url", "https://example.com/docs");
+  await page.reload();
+  await frame.locator("#view-todo").click();
+  await expect(frame.locator("#todo-editor strong")).toHaveText("备注");
+  await expect(doc).toBeEditable();
+  await expect(frame.locator("#todo-editor h2")).toHaveCount(1);
+  await expect(doc.locator("table")).toContainText("验证编辑器");
+  await expect(doc.locator("pre")).toContainText("const todo = true;");
+  await frame.locator('#todo-editor input[type="checkbox"]').first().check();
+  await expect.poll(() => readTodo(data)).toMatch(/[*-] \[x\] 写下下一步/);
+  await page.reload(); await frame.locator("#view-todo").click();
+  await expect(frame.locator('#todo-editor input[type="checkbox"]').first()).toBeChecked();
+  await page.screenshot({ path: join(root, "test-results/todo-desktop.png"), style: "#dark { visibility:hidden }" });
+  await frame.locator("#view-board").click();
+  await frame.locator("#auto").uncheck();
+  await hook("demo-approval", "Stop");
+  await frame.locator("#refresh").click();
+  await expect(frame.locator('.column[data-status="approval"] .card')).toHaveCount(0);
+  await expect(frame.locator('.column[data-status="ended"] .card')).toHaveCount(3);
+  await frame.locator("#auto").check();
+  await hook("demo-approval", "UserPromptSubmit", { prompt: "演示：继续安装", turn_id: "next-turn" });
+  await expect(frame.locator('.column[data-status="running"] [data-task="demo-approval"]')).toBeVisible({ timeout: 7000 });
+  offline = true;
+  await frame.locator("#refresh").click();
+  await expect(frame.locator("#notice")).toContainText("同步中断");
+  await expect(frame.locator(".card")).toHaveCount(6);
+  offline = false;
+  await frame.locator("#refresh").click();
+  await expect(frame.locator("#notice")).toBeHidden();
+  await page.locator("#dark").click();
+  await expect(frame.locator("html")).toHaveAttribute("data-theme", "dark");
+  await hook("demo-xss", "UserPromptSubmit", { prompt: "演示：检查事件摘要和详情显示" });
+  await hook("demo-xss", "Stop");
+  await frame.locator("#refresh").click();
+  await page.screenshot({ path: join(root, "test-results/board-dark.png"), style: "#dark { visibility:hidden }" });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await frame.locator("#view-todo").click();
+  await expect(frame.locator("#todo-editor h2")).toBeVisible();
+  await page.screenshot({ path: join(root, "test-results/todo-narrow.png"), style: "#dark { visibility:hidden }" });
+  await frame.locator("#view-board").click();
+  await frame.locator('[data-task="demo-running"]').click();
+  await expect(page.locator("html")).toHaveAttribute("data-opened-url", "codex://threads/demo-running");
+  await page.screenshot({ path: join(root, "test-results/board-narrow.png"), style: "#dark { visibility:hidden }" });
+  const overflow = await page.frames().find(item => item.url().endsWith("/app"))!.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+  expect(overflow).toBe(false);
+  await page.goto(new URL("/preview", server.url).toString());
+  await expect(page.locator(".card")).toHaveCount(6);
+  await expect(page.locator("#preview")).toHaveText("开发预览");
+  await page.locator('[data-task="demo-running"]').click();
+  await expect(page.locator("#notice")).toContainText("开发预览不打开真实聊天");
+  await page.locator("#view-todo").click();
+  await expect(page.locator("#todo-editor h2")).toHaveText("演示：今天要做的事");
+  await expect(page.locator("#todo-editor .ProseMirror.todo-document")).not.toBeEditable();
+  expect(errors).toEqual([]);
+  console.log("Browser checks passed: BlockNote single WYSIWYG surface, native Chinese slash menu, Markdown shortcuts/paste, table/code block persistence, checkbox edit/reload, autosave, serial saves while typing, Chinese composition, empty text, safe content, failed save keeps draft and retries; official AppBridge, chat links, 4 columns, filters, live updates, dark theme and 375px.");
+} finally { await browser.close(); server.stop(); store.close(); await client.close(); rmSync(data, { recursive: true, force: true }); }

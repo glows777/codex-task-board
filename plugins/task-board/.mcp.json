@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "task-board": {
+      "command": "bun",
+      "args": ["dist/server.js"],
+      "cwd": "."
+    }
+  }
+}

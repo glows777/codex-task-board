@@ -1,0 +1,12 @@
+{
+  "name": "codex-task-board-local",
+  "interface": { "displayName": "任务看板 · 本地开发" },
+  "plugins": [
+    {
+      "name": "task-board",
+      "source": { "source": "local", "path": "./plugins/task-board" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Productivity"
+    }
+  ]
+}

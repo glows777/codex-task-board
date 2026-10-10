@@ -1,0 +1,33 @@
+{
+  "name": "codex-task-board",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test ./tests",
+    "test:installed": "bun tests/installed-runtime.ts",
+    "test:browser": "bun scripts/browser-check.ts",
+    "preview": "bun src/preview.ts"
+  },
+  "dependencies": {
+    "@blocknote/core": "^0.55.0",
+    "@blocknote/mantine": "^0.55.0",
+    "@blocknote/react": "^0.55.0",
+    "@mantine/core": "^9.7.1",
+    "@mantine/hooks": "^9.7.1",
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@openai/mcp-extensions": "^0.1.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "playwright": "^1.64.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,7 @@
+node_modules/
+dist/
+plugins/task-board/dist/
+references/
+.preview-data/
+test-results/
+*.sqlite*
