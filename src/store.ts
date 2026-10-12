@@ -16,12 +16,12 @@ export class Store {
       CREATE TABLE IF NOT EXISTS events (sequence INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT NOT NULL, payload TEXT NOT NULL, at INTEGER NOT NULL);
       CREATE INDEX IF NOT EXISTS events_session ON events(session, sequence);
       CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER NOT NULL);
-      CREATE TABLE IF NOT EXISTS focus (id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'discovered', name TEXT NOT NULL DEFAULT '',
+      CREATE TABLE IF NOT EXISTS focus (id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'following', name TEXT NOT NULL DEFAULT '',
         viewed_reply INTEGER NOT NULL DEFAULT 0, last_reply INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, excluded INTEGER NOT NULL DEFAULT 0);`);
     // Add personal state without rewriting hook history or treating old replies as completed.
     if (this.db.query<{user_version:number},[]>("PRAGMA user_version").get()!.user_version < 1) this.db.transaction(() => {
-      this.db.exec(`INSERT OR IGNORE INTO focus(id,last_reply,excluded)
-      SELECT tasks.id, COALESCE((SELECT MAX(sequence) FROM events WHERE session=tasks.id AND json_extract(payload,'$.name')='Stop'),0),
+      this.db.exec(`INSERT OR IGNORE INTO focus(id,state,last_reply,excluded)
+      SELECT tasks.id, 'discovered', COALESCE((SELECT MAX(sequence) FROM events WHERE session=tasks.id AND json_extract(payload,'$.name')='Stop'),0),
       CASE WHEN (SELECT json_extract(payload,'$.summary') FROM events WHERE session=tasks.id AND json_extract(payload,'$.name')='UserPromptSubmit' ORDER BY sequence DESC LIMIT 1)
         LIKE 'This is an app-generated request for a suggested next user message.%The user did not write this message.%' THEN 1 ELSE 0 END
       FROM tasks;
@@ -30,7 +30,8 @@ export class Store {
   }
   record(event: Event): void {
     this.db.transaction(() => {
-      this.db.query("INSERT OR IGNORE INTO focus(id) VALUES(?)").run(event.sessionId);
+      // Explicit state also applies to existing databases whose column default is still discovered.
+      this.db.query("INSERT OR IGNORE INTO focus(id,state) VALUES(?,'following')").run(event.sessionId);
       if (event.name === "UserPromptSubmit") {
         const excluded = Number(isGeneratedPrompt(event.summary));
         this.db.query("UPDATE focus SET excluded=?,version=version+1 WHERE id=? AND excluded<>?").run(excluded,event.sessionId,excluded);

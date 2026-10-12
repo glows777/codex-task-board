@@ -16,8 +16,7 @@ const event = (name: string, extra = {}) => normalizeEvent({ hook_event_name: na
 test("new replies need review; only a human mutation completes a followed conversation", () => {
   const { store, directory } = setup();
   store.record(event("UserPromptSubmit")); store.setNames([{ id: "thread-1", name: "稳定的对话名称" }]);
-  let task = store.snapshot().tasks[0]; expect(task.focus).toBe("discovered");
-  task = store.updateFocus(task.id, { state: "following" }, task.version);
+  let task = store.snapshot().tasks[0]; expect(task.focus).toBe("following");
   store.record(event("Stop")); task = store.snapshot().tasks[0];
   expect(task.focus).toBe("following"); expect(hasUnreadReply(task)).toBe(true);
   task = store.updateFocus(task.id, { viewedReplySequence: task.replySequence }, task.version);
@@ -35,6 +34,31 @@ test("new replies need review; only a human mutation completes a followed conver
   expect(reloaded.snapshot().tasks[0].focus).toBe("done");
   expect(hasUnreadReply(reloaded.snapshot().tasks[0])).toBe(true);
   reloaded.close();
+});
+
+test("new conversations follow by default in an existing database without overriding personal choices", () => {
+  const directory = mkdtempSync(join(tmpdir(), "focus-existing-")); directories.push(directory);
+  const db = new Database(join(directory, "board.sqlite"));
+  db.exec(`CREATE TABLE focus (id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'discovered', name TEXT NOT NULL DEFAULT '',
+    viewed_reply INTEGER NOT NULL DEFAULT 0, last_reply INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, excluded INTEGER NOT NULL DEFAULT 0);
+    PRAGMA user_version=1;`);
+  db.close();
+  let store = new Store(directory);
+  for (const state of ["discovered", "later", "done"] as const) {
+    store.record(event("UserPromptSubmit", { session_id: state }));
+    const task = store.snapshot().tasks.find(task => task.id === state)!;
+    store.updateFocus(task.id, { state }, task.version);
+  }
+  store.close(); store = new Store(directory);
+  store.record(event("SessionStart"));
+  store.record(event("UserPromptSubmit"));
+  expect(store.snapshot().tasks.find(task => task.id === "thread-1")!.focus).toBe("following");
+  for (const state of ["discovered", "later", "done"] as const) {
+    store.record(event("UserPromptSubmit", { session_id: state, turn_id: "turn-2" }));
+    store.record(event("Stop", { session_id: state, turn_id: "turn-2" }));
+    expect(store.snapshot().tasks.find(task => task.id === state)!.focus).toBe(state);
+  }
+  store.close();
 });
 
 test("stale panels cannot clear a reply that arrived after the viewed card or override another panel", () => {

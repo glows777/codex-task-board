@@ -2,7 +2,7 @@ export const statuses = ["running", "approval", "error", "ended"] as const;
 export type Status = typeof statuses[number];
 export const focusStates = ["discovered", "following", "later", "done"] as const;
 export type FocusState = typeof focusStates[number];
-export const focusLabels: Record<FocusState, string> = { discovered: "新发现", following: "跟进中", later: "稍后", done: "已完成" };
+export const focusLabels: Record<FocusState, string> = { discovered: "新发现", following: "跟进中", later: "稍后", done: "已确认完成" };
 export const statusLabels: Record<Status, string> = { running: "运行中", approval: "等待批准", error: "异常", ended: "本轮结束" };
 export const hookEvents = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt"] as const;
 export type EventName = typeof hookEvents[number];
@@ -29,7 +29,6 @@ export interface FocusTask extends Task {
 export interface Activity extends Event { sequence: number }
 export interface Snapshot { tasks: FocusTask[]; lastEventAt: number | null; collectedSince: number | null; revision: number; namesError?: string }
 export const hasUnreadReply = (task: FocusTask): boolean => task.replySequence > task.viewedReplySequence;
-export const needsAction = (task: FocusTask): boolean => hasUnreadReply(task) || task.status === "approval" || (task.status === "running" && task.reason === "等待你回答问题");
 
 export function reduceTask(previous: Task | null, event: Event): Task | null {
   if (event.name === "SessionStart") return previous;

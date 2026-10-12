@@ -58,11 +58,13 @@ select { max-width:170px; min-width:110px; text-overflow:ellipsis; }
 .card-content { min-width:0; flex:1; }
 .card-top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:11px; color:var(--muted); }
 .project-chip { overflow-wrap:anywhere; min-width:0; }
+.card-state,.unread-label,.completion-label { display:inline-block; padding:2px 6px; border-radius:4px; background:color-mix(in srgb,currentColor 9%,transparent); line-height:1.5; white-space:nowrap; }
 .card-state { color:var(--muted); }
 [data-status="running"] .card-state { color:var(--running); }
 [data-status="approval"] .card-state { color:var(--approval); }
 [data-status="error"] .card-state { color:var(--error); }
-.card[data-unread="true"] .card-state,.unread-label { color:var(--focus); }
+.unread-label { color:var(--focus); }
+.completion-label { color:var(--ended); }
 .card-title { display:block; width:100%; text-align:left; border:0; background:transparent; padding:4px 0; min-height:40px; font-size:15px; font-weight:600; line-height:1.65; overflow-wrap:anywhere; }
 .name-pending { color:var(--muted); font-size:11px; }
 .card-reason { margin:2px 0 6px; font-size:12px; color:var(--muted); line-height:1.7; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }

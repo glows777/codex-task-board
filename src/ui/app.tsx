@@ -4,7 +4,7 @@ import { AllSelection } from "prosemirror-state";
 import { zh } from "@blocknote/core/locales";
 import { BlockNoteView } from "@blocknote/mantine";
 import { createRoot } from "react-dom/client";
-import { focusLabels, hasUnreadReply, needsAction, type FocusState, type FocusTask, type Snapshot } from "../model.ts";
+import { focusLabels, hasUnreadReply, type FocusState, type FocusTask, type Snapshot } from "../model.ts";
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const board = element("board"), notice = element("notice"), connection = element("connection");
@@ -13,7 +13,7 @@ const preview = document.querySelector<HTMLMetaElement>('meta[name="board-mode"]
 let snapshot: Snapshot = { tasks: [], lastEventAt: null, collectedSince: null, revision: -1 };
 let busy = false, connected = false, lastError = "", chatError = "";
 let app: App;
-type Scope = "all" | "attention" | "discovered";
+type Scope = "all" | "discovered";
 let scope: Scope = "all";
 let showCompleted = false, actionBusy = false;
 const taskOrder = new Map<string, number>();
@@ -30,7 +30,7 @@ const escape = (value: string): string => value.replace(/[&<>"']/g, char => ({ "
 const relative = (at: number) => { const seconds = Math.max(0, Math.floor((Date.now() - at) / 1000)); return seconds < 60 ? "刚刚" : seconds < 3600 ? `${Math.floor(seconds / 60)} 分钟前` : seconds < 86400 ? `${Math.floor(seconds / 3600)} 小时前` : `${Math.floor(seconds / 86400)} 天前`; };
 const date = (at: number) => new Date(at).toLocaleString("zh-CN", { hour12: false });
 function showNotice(): void {
-  notice.textContent = lastError || chatError || snapshot.namesError || (snapshot.tasks.length ? "" : "还没有对话记录。接入 hooks 后，新发现的对话会出现在这里，你可以选择加入关注。");
+  notice.textContent = lastError || chatError || snapshot.namesError || (snapshot.tasks.length ? "" : "还没有对话记录。接入 hooks 后，新对话会自动进入跟进中，你可以移到稍后或取消关注。");
   notice.hidden = !notice.textContent;
   notice.dataset.error = String(!!lastError || !!chatError);
 }
@@ -46,25 +46,25 @@ function render(): void {
   const query = search.value.trim().toLocaleLowerCase();
   const matching = snapshot.tasks.filter(task => (!project.value || task.cwd === project.value) && (!query || [task.title, task.request, task.reply, task.project, task.reason].join(" ").toLocaleLowerCase().includes(query)));
   const followed = matching.filter(task => task.focus === "following" || task.focus === "later");
-  const counts = { all: followed.length, attention: followed.filter(needsAction).length, discovered: matching.filter(task => task.focus === "discovered").length, done: matching.filter(task => task.focus === "done").length };
+  const counts = { all: followed.length, discovered: matching.filter(task => task.focus === "discovered").length, done: matching.filter(task => task.focus === "done").length };
   Object.entries(counts).forEach(([key, count]) => { element(`${key}-count`).textContent = String(count); });
   const doneUnread = matching.filter(task => task.focus === "done" && hasUnreadReply(task)).length;
-  element("completed-label").textContent = `显示已完成${counts.done ? ` (${counts.done})` : ""}${doneUnread ? ` · ${doneUnread} 个有新回复` : ""}`;
+  element("completed-label").textContent = `显示已确认完成${counts.done ? ` (${counts.done})` : ""}${doneUnread ? ` · ${doneUnread} 个有新回复` : ""}`;
   matching.sort((a, b) => taskOrder.get(a.id)! - taskOrder.get(b.id)!);
-  element("board-summary").textContent = snapshot.revision < 0 ? "正在读取…" : counts.all ? `${counts.all} 个关注的对话${counts.attention ? ` · ${counts.attention} 个待处理` : ""}` : "把需要继续跟进的对话加入关注";
+  element("board-summary").textContent = snapshot.revision < 0 ? "正在读取…" : counts.all ? `${counts.all} 个关注的对话` : "新接入的对话会自动进入跟进中";
   board.dataset.layout = "board";
   board.dataset.scope = scope;
   const groups: FocusState[] = scope === "discovered" ? ["discovered"] : ["following", "later", ...(showCompleted ? ["done" as const] : [])];
   const sections = groups.map(group => {
-    const tasks = matching.filter(task => task.focus === group && (scope !== "attention" || needsAction(task)));
+    const tasks = matching.filter(task => task.focus === group);
     return `<section class="column" data-focus="${group}" data-empty="${!tasks.length}" aria-labelledby="column-${group}"><div class="column-head"><h2 id="column-${group}">${focusLabels[group]}</h2><span class="count">${tasks.length}</span></div><div class="cards"><div class="thread-cards">${tasks.map(task => {
       const unread = hasUnreadReply(task);
-      const state = task.status === "approval" ? "等你批准" : needsAnswer(task) ? "等你回答" : task.status === "running" ? "运行中" : task.status === "error" ? task.closed ? "已中断" : "工具失败" : unread ? "待查看" : "回复已查看";
+      const state = task.status === "approval" ? "等你批准" : needsAnswer(task) ? "等你回答" : task.status === "running" ? "运行中" : task.status === "error" ? task.closed ? "已中断" : "工具失败" : "本轮结束";
       const context = task.reply && (unread || task.status === "ended") ? task.reply : task.request || task.reason;
       const disabled = preview || actionBusy ? "disabled" : "";
       const control = (action: string, text: string) => `<button type="button" data-action="${action}" data-control="${escape(task.id)}-${action}" ${disabled}>${text}</button>`;
-      return `<article class="card" data-task="${escape(task.id)}" data-status="${task.status}" data-unread="${unread}" data-needs-action="${needsAction(task)}"><div class="card-content"><div class="card-top"><span class="project-chip" title="${escape(task.cwd)}">${escape(task.project)}</span><span class="card-state">${state}</span>${unread && task.status !== "ended" ? '<span class="unread-label">新回复待查看</span>' : ""}</div><button type="button" class="card-title" data-open="${escape(task.id)}" data-control="${escape(task.id)}-open" title="${escape(task.title)}">${escape(task.title)}</button>${!task.titleKnown ? '<span class="name-pending">名称待同步</span>' : ""}<p class="card-reason" title="${escape(context)}">${escape(context)}</p><div class="card-meta"><time data-at="${task.updatedAt}" datetime="${new Date(task.updatedAt).toISOString()}" title="${escape(date(task.updatedAt))}">${relative(task.updatedAt)}</time><span class="card-actions">${group === "discovered" ? control("follow", "加入关注") : group === "done" ? control("restore", "恢复关注") : `${unread ? control("view", "标记已查看") : ""}${control(group === "later" ? "follow" : "later", group === "later" ? "继续跟进" : "稍后")}${control("unfollow", "取消关注")}`}</span></div></div>${group !== "discovered" && group !== "done" ? `<button type="button" class="complete-task" data-action="complete" data-control="${escape(task.id)}-complete" aria-label="确认完成：${escape(task.title)}" title="确认完成" ${disabled}><span class="completion-circle" aria-hidden="true"></span></button>` : ""}</article>`;
-    }).join("")}${!tasks.length && group !== "following" ? `<p class="empty">${group === "discovered" ? "没有新发现的对话" : group === "done" ? "已完成的事项会留在这里" : "稍后再处理的对话放在这里"}</p>` : ""}</div></div></section>`;
+      return `<article class="card" data-task="${escape(task.id)}" data-status="${task.status}" data-unread="${unread}"><div class="card-content"><div class="card-top"><span class="project-chip" title="${escape(task.cwd)}">${escape(task.project)}</span><span class="card-state" title="${escape(task.status === "ended" ? "Codex 本轮回复结束，不代表事项已确认完成" : task.reason)}">${state}</span>${unread ? '<span class="unread-label">待查看</span>' : ""}${group === "done" ? '<span class="completion-label" title="你已确认这件事完成">已确认完成</span>' : ""}</div><button type="button" class="card-title" data-open="${escape(task.id)}" data-control="${escape(task.id)}-open" title="${escape(task.title)}">${escape(task.title)}</button>${!task.titleKnown ? '<span class="name-pending">名称待同步</span>' : ""}<p class="card-reason" title="${escape(context)}">${escape(context)}</p><div class="card-meta"><time data-at="${task.updatedAt}" datetime="${new Date(task.updatedAt).toISOString()}" title="${escape(date(task.updatedAt))}">${relative(task.updatedAt)}</time><span class="card-actions">${group === "discovered" ? control("follow", "加入关注") : group === "done" ? control("restore", "恢复关注") : `${unread ? control("view", "标记已查看") : ""}${control(group === "later" ? "follow" : "later", group === "later" ? "继续跟进" : "稍后")}${control("unfollow", "取消关注")}`}</span></div></div>${group !== "discovered" && group !== "done" ? `<button type="button" class="complete-task" data-action="complete" data-control="${escape(task.id)}-complete" aria-label="确认完成：${escape(task.title)}" title="确认完成" ${disabled}><span class="completion-circle" aria-hidden="true"></span></button>` : ""}</article>`;
+    }).join("")}${!tasks.length && group !== "following" ? `<p class="empty">${group === "discovered" ? "没有新发现的对话" : group === "done" ? "已确认完成的事项会留在这里" : "稍后再处理的对话放在这里"}</p>` : ""}</div></div></section>`;
   }).join("");
   const parsed = document.createElement("template"); parsed.innerHTML = sections;
   const groupKey = [...parsed.content.querySelectorAll<HTMLElement>(".column")].map(node => node.dataset.focus).join(",");
@@ -80,7 +80,7 @@ function render(): void {
   }
   const following = board.querySelector<HTMLElement>('[data-focus="following"] .cards');
   if (following) {
-    if (!followed.length || (scope === "attention" && !counts.attention)) following.querySelector(".thread-cards")!.insertAdjacentHTML("beforeend", `<div class="board-empty"><strong>${scope === "attention" ? "关注的对话暂无待处理事项" : "还没有关注的对话"}</strong><span>${scope === "attention" ? "新回复、批准和回答请求会出现在这里。" : counts.discovered ? "从新发现中选择你想继续跟进的对话。" : "接入后的对话会先出现在新发现中。"}</span></div>`);
+    if (!followed.length) following.querySelector(".thread-cards")!.insertAdjacentHTML("beforeend", `<div class="board-empty"><strong>还没有关注的对话</strong><span>${counts.discovered ? "从新发现中选择你想继续跟进的对话。" : "新接入的对话会自动进入跟进中，可移到稍后或取消关注。"}</span></div>`);
   }
   board.querySelectorAll<HTMLElement>(".column").forEach(node => { node.querySelector<HTMLElement>(".cards")!.scrollTop = scrolls.get(node.dataset.focus) || 0; });
   if (focusKey) [...board.querySelectorAll<HTMLElement>("[data-control]")].find(node => node.dataset.control === focusKey)?.focus({ preventScroll: true });
@@ -96,7 +96,7 @@ async function changeFocus(task: FocusTask, state?: FocusState, viewedReplySeque
   try {
     const value = await call("focus_update", { sessionId: task.id, expectedVersion: task.version, ...(state ? { state } : {}), ...(viewedReplySequence !== undefined ? { viewedReplySequence } : {}) });
     accept(value);
-    if (state && allowUndo) { undoAction = { id: task.id, state: task.focus }; showUndo(state === "done" ? "已移到已完成" : state === "discovered" ? "已取消关注" : state === "later" ? "已移到稍后" : "已加入关注"); }
+    if (state && allowUndo) { undoAction = { id: task.id, state: task.focus }; showUndo(state === "done" ? "已确认完成" : state === "discovered" ? "已取消关注" : state === "later" ? "已移到稍后" : "已加入关注"); }
   } catch (error) {
     await update();
     chatError = `未保存。${error instanceof Error ? error.message : "请重试"}`;

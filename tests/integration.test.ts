@@ -29,7 +29,9 @@ test("built hook process → SQLite → built MCP server → sidebar resource", 
     const tools = await client.listTools();
     expect(tools.tools.find(tool => tool.name === "board")?._meta?.["openai/ui"]).toEqual({ entrypoints: [{ type: "global" }] });
     const snapshot = await client.callTool({ name: "board", arguments: {} });
-    expect(((snapshot.structuredContent as Record<string, unknown>)?.tasks as {status:string}[])[0].status).toBe("approval");
+    const observed = ((snapshot.structuredContent as Record<string, unknown>)?.tasks as {status:string;focus:string}[])[0];
+    expect(observed.status).toBe("approval");
+    expect(observed.focus).toBe("following");
     const resource = await client.readResource({ uri: "ui://task-board/dashboard.html" });
     expect(resource.contents[0].mimeType).toBe("text/html;profile=mcp-app");
     expect("text" in resource.contents[0] && resource.contents[0].text).toContain('content="app"');
