@@ -24,10 +24,10 @@
             <button id="refresh" class="control" type="button" aria-label="刷新看板" title="刷新看板"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M18 17a7 7 0 0 1-12 1l-2-3"/></svg></button>
             <span id="preview" class="preview" hidden>开发预览</span>
           </div>
-          <div class="scopes" aria-label="任务筛选">
-            <button id="scope-all" type="button" data-scope="all" aria-pressed="true">全部关注 <span id="all-count">0</span></button>
-            <button id="scope-discovered" type="button" data-scope="discovered" aria-pressed="false">新发现 <span id="discovered-count">0</span></button>
-            <label class="completed-toggle"><input id="show-completed" type="checkbox" /><span id="completed-label">显示已确认完成</span><span id="done-count" hidden>0</span></label>
+          <div class="scopes" aria-label="看板操作">
+            <span class="board-count">跟进事项 <span id="all-count">0</span></span>
+            <button id="add-thread" type="button">＋ 添加对话</button>
+            <label class="completed-toggle"><input id="show-completed" type="checkbox" /><span id="completed-label">显示已完成</span></label>
           </div>
         </div>
         <main id="board" class="board" tabindex="-1" aria-label="我的关注看板"></main>
@@ -41,6 +41,13 @@
     </div>
     <div id="undo" class="undo" role="status" hidden><span id="undo-message"></span><button id="undo-button" class="text-control" type="button">撤销</button></div>
   </div>
+  <dialog id="add-dialog" class="add-dialog" aria-labelledby="add-title" aria-describedby="add-description">
+    <div class="add-head"><h2 id="add-title">添加对话</h2><button id="add-close" class="text-control" type="button" aria-label="关闭添加对话">关闭</button></div>
+    <p id="add-description">选择要继续跟进的对话。</p>
+    <label class="search"><input id="add-search" type="search" placeholder="搜索名称或项目" aria-label="搜索可添加的对话" autocomplete="off" /></label>
+    <div id="add-list" class="add-list"></div>
+    <p id="add-notice" class="add-notice" role="status" hidden></p>
+  </dialog>
   <script type="module">__SCRIPT__</script>
 </body>
 </html>

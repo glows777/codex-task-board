@@ -13,10 +13,9 @@ const preview = document.querySelector<HTMLMetaElement>('meta[name="board-mode"]
 let snapshot: Snapshot = { tasks: [], lastEventAt: null, collectedSince: null, revision: -1 };
 let busy = false, connected = false, lastError = "", chatError = "";
 let app: App;
-type Scope = "all" | "discovered";
-let scope: Scope = "all";
 let showCompleted = false, actionBusy = false;
 const taskOrder = new Map<string, number>();
+const addDialog = element<HTMLDialogElement>("add-dialog"), addSearch = element<HTMLInputElement>("add-search");
 const needsAnswer = (task: FocusTask) => task.status === "running" && task.reason === "等待你回答问题";
 const todoEditorRoot = element("todo-editor"), todoStatus = element("todo-status");
 let undoAction: {id:string;state:FocusState} | undefined;
@@ -30,7 +29,7 @@ const escape = (value: string): string => value.replace(/[&<>"']/g, char => ({ "
 const relative = (at: number) => { const seconds = Math.max(0, Math.floor((Date.now() - at) / 1000)); return seconds < 60 ? "刚刚" : seconds < 3600 ? `${Math.floor(seconds / 60)} 分钟前` : seconds < 86400 ? `${Math.floor(seconds / 3600)} 小时前` : `${Math.floor(seconds / 86400)} 天前`; };
 const date = (at: number) => new Date(at).toLocaleString("zh-CN", { hour12: false });
 function showNotice(): void {
-  notice.textContent = lastError || chatError || snapshot.namesError || (snapshot.tasks.length ? "" : "还没有对话记录。接入 hooks 后，新对话会自动进入跟进中，你可以移到稍后或取消关注。");
+  notice.textContent = chatError || lastError || snapshot.namesError || (snapshot.tasks.length ? "" : "还没有对话记录。接入 hooks 后，新对话会自动进入跟进中，你可以移到稍后或移出看板。");
   notice.hidden = !notice.textContent;
   notice.dataset.error = String(!!lastError || !!chatError);
 }
@@ -46,15 +45,14 @@ function render(): void {
   const query = search.value.trim().toLocaleLowerCase();
   const matching = snapshot.tasks.filter(task => (!project.value || task.cwd === project.value) && (!query || [task.title, task.request, task.reply, task.project, task.reason].join(" ").toLocaleLowerCase().includes(query)));
   const followed = matching.filter(task => task.focus === "following" || task.focus === "later");
-  const counts = { all: followed.length, discovered: matching.filter(task => task.focus === "discovered").length, done: matching.filter(task => task.focus === "done").length };
-  Object.entries(counts).forEach(([key, count]) => { element(`${key}-count`).textContent = String(count); });
+  const counts = { all: followed.length, done: matching.filter(task => task.focus === "done").length };
+  element("all-count").textContent = String(counts.all);
   const doneUnread = matching.filter(task => task.focus === "done" && hasUnreadReply(task)).length;
-  element("completed-label").textContent = `显示已确认完成${counts.done ? ` (${counts.done})` : ""}${doneUnread ? ` · ${doneUnread} 个有新回复` : ""}`;
+  element("completed-label").textContent = `显示已完成${counts.done ? ` (${counts.done})` : ""}${doneUnread ? ` · ${doneUnread} 个有新回复` : ""}`;
   matching.sort((a, b) => taskOrder.get(a.id)! - taskOrder.get(b.id)!);
   element("board-summary").textContent = snapshot.revision < 0 ? "正在读取…" : counts.all ? `${counts.all} 个关注的对话` : "新接入的对话会自动进入跟进中";
   board.dataset.layout = "board";
-  board.dataset.scope = scope;
-  const groups: FocusState[] = scope === "discovered" ? ["discovered"] : ["following", "later", ...(showCompleted ? ["done" as const] : [])];
+  const groups: FocusState[] = ["following", "later", ...(showCompleted ? ["done" as const] : [])];
   const sections = groups.map(group => {
     const tasks = matching.filter(task => task.focus === group);
     return `<section class="column" data-focus="${group}" data-empty="${!tasks.length}" aria-labelledby="column-${group}"><div class="column-head"><h2 id="column-${group}">${focusLabels[group]}</h2><span class="count">${tasks.length}</span></div><div class="cards"><div class="thread-cards">${tasks.map(task => {
@@ -63,8 +61,8 @@ function render(): void {
       const context = task.reply && (unread || task.status === "ended") ? task.reply : task.request || task.reason;
       const disabled = preview || actionBusy ? "disabled" : "";
       const control = (action: string, text: string) => `<button type="button" data-action="${action}" data-control="${escape(task.id)}-${action}" ${disabled}>${text}</button>`;
-      return `<article class="card" data-task="${escape(task.id)}" data-status="${task.status}" data-unread="${unread}"><div class="card-content"><div class="card-top"><span class="project-chip" title="${escape(task.cwd)}">${escape(task.project)}</span><span class="card-state" title="${escape(task.status === "ended" ? "Codex 本轮回复结束，不代表事项已确认完成" : task.reason)}">${state}</span>${unread ? '<span class="unread-label">待查看</span>' : ""}${group === "done" ? '<span class="completion-label" title="你已确认这件事完成">已确认完成</span>' : ""}</div><button type="button" class="card-title" data-open="${escape(task.id)}" data-control="${escape(task.id)}-open" title="${escape(task.title)}">${escape(task.title)}</button>${!task.titleKnown ? '<span class="name-pending">名称待同步</span>' : ""}<p class="card-reason" title="${escape(context)}">${escape(context)}</p><div class="card-meta"><time data-at="${task.updatedAt}" datetime="${new Date(task.updatedAt).toISOString()}" title="${escape(date(task.updatedAt))}">${relative(task.updatedAt)}</time><span class="card-actions">${group === "discovered" ? control("follow", "加入关注") : group === "done" ? control("restore", "恢复关注") : `${unread ? control("view", "标记已查看") : ""}${control(group === "later" ? "follow" : "later", group === "later" ? "继续跟进" : "稍后")}${control("unfollow", "取消关注")}`}</span></div></div>${group !== "discovered" && group !== "done" ? `<button type="button" class="complete-task" data-action="complete" data-control="${escape(task.id)}-complete" aria-label="确认完成：${escape(task.title)}" title="确认完成" ${disabled}><span class="completion-circle" aria-hidden="true"></span></button>` : ""}</article>`;
-    }).join("")}${!tasks.length && group !== "following" ? `<p class="empty">${group === "discovered" ? "没有新发现的对话" : group === "done" ? "已确认完成的事项会留在这里" : "稍后再处理的对话放在这里"}</p>` : ""}</div></div></section>`;
+      return `<article class="card" data-task="${escape(task.id)}" data-status="${task.status}" data-unread="${unread}"><div class="card-content"><div class="card-top"><span class="project-chip" title="${escape(task.cwd)}">${escape(task.project)}</span><span class="card-state${task.status === "ended" ? " state-quiet" : ""}" title="${escape(task.status === "ended" ? "Codex 本轮回复结束，不代表事项已完成" : task.reason)}">${state}</span>${unread ? '<span class="unread-label" title="有新回复，打开聊天后清除提示">新回复</span>' : ""}</div><button type="button" class="card-title" data-open="${escape(task.id)}" data-control="${escape(task.id)}-open" ${actionBusy ? "disabled" : ""} title="${escape(task.title)}">${escape(task.title)}</button>${!task.titleKnown ? '<span class="name-pending">名称待同步</span>' : ""}<p class="card-reason" title="${escape(context)}">${escape(context)}</p><div class="card-meta"><time data-at="${task.updatedAt}" datetime="${new Date(task.updatedAt).toISOString()}" title="${escape(date(task.updatedAt))}">${relative(task.updatedAt)}</time><span class="card-actions">${group === "done" ? control("restore", "恢复跟进") : `${control(group === "later" ? "follow" : "later", group === "later" ? "继续跟进" : "稍后")}${control("unfollow", "移出看板")}`}</span></div></div>${group !== "done" ? `<button type="button" class="complete-task" data-action="complete" data-control="${escape(task.id)}-complete" aria-label="确认完成：${escape(task.title)}" title="确认完成" ${disabled}><span class="completion-circle" aria-hidden="true"></span></button>` : ""}</article>`;
+    }).join("")}${!tasks.length && group !== "following" ? `<p class="empty">${group === "done" ? "已完成的事项会留在这里" : "稍后再处理的对话放在这里"}</p>` : ""}</div></div></section>`;
   }).join("");
   const parsed = document.createElement("template"); parsed.innerHTML = sections;
   const groupKey = [...parsed.content.querySelectorAll<HTMLElement>(".column")].map(node => node.dataset.focus).join(",");
@@ -80,11 +78,11 @@ function render(): void {
   }
   const following = board.querySelector<HTMLElement>('[data-focus="following"] .cards');
   if (following) {
-    if (!followed.length) following.querySelector(".thread-cards")!.insertAdjacentHTML("beforeend", `<div class="board-empty"><strong>还没有关注的对话</strong><span>${counts.discovered ? "从新发现中选择你想继续跟进的对话。" : "新接入的对话会自动进入跟进中，可移到稍后或取消关注。"}</span></div>`);
+    if (!followed.length) following.querySelector(".thread-cards")!.insertAdjacentHTML("beforeend", `<div class="board-empty"><strong>还没有跟进事项</strong><span>点击“添加对话”，选择要继续跟进的对话。</span></div>`);
   }
   board.querySelectorAll<HTMLElement>(".column").forEach(node => { node.querySelector<HTMLElement>(".cards")!.scrollTop = scrolls.get(node.dataset.focus) || 0; });
   if (focusKey) [...board.querySelectorAll<HTMLElement>("[data-control]")].find(node => node.dataset.control === focusKey)?.focus({ preventScroll: true });
-  clock(); showNotice();
+  renderAddList(); clock(); showNotice();
 }
 function showUndo(message: string): void {
   element("undo-message").textContent = message;
@@ -96,7 +94,7 @@ async function changeFocus(task: FocusTask, state?: FocusState, viewedReplySeque
   try {
     const value = await call("focus_update", { sessionId: task.id, expectedVersion: task.version, ...(state ? { state } : {}), ...(viewedReplySequence !== undefined ? { viewedReplySequence } : {}) });
     accept(value);
-    if (state && allowUndo) { undoAction = { id: task.id, state: task.focus }; showUndo(state === "done" ? "已确认完成" : state === "discovered" ? "已取消关注" : state === "later" ? "已移到稍后" : "已加入关注"); }
+    if (state && allowUndo) { undoAction = { id: task.id, state: task.focus }; showUndo(state === "done" ? "已完成" : state === "discovered" ? "已移出看板" : state === "later" ? "已移到稍后" : "已加入跟进"); }
   } catch (error) {
     await update();
     chatError = `未保存。${error instanceof Error ? error.message : "请重试"}`;
@@ -134,18 +132,41 @@ async function update(): Promise<void> {
   busy = true; refresh.disabled = true;
   try { accept(await call("board_snapshot")); lastError = ""; }
   catch (error) { lastError = `状态同步中断，保留最近记录。${error instanceof Error ? error.message : "请稍后刷新"}`; }
-  finally { busy = false; refresh.disabled = false; clock(); showNotice(); }
+  finally { busy = false; refresh.disabled = false; renderAddList(); clock(); showNotice(); }
 }
 async function openChat(id: string): Promise<void> {
+  if (actionBusy) return;
+  const task = snapshot.tasks.find(task => task.id === id);
+  if (!task) return;
   chatError = "";
+  if (preview) { chatError = "开发预览不打开真实聊天，请在 Codex 中点击卡片。"; showNotice(); return; }
+  actionBusy = true; render();
+  let opened = false;
   try {
-    if (preview) { chatError = "开发预览不打开真实聊天，请在 Codex 中点击卡片。"; return; }
     if (!connected) throw new Error("Not connected");
     const result = await app.openLink({ url: `codex://threads/${encodeURIComponent(id)}` }, { timeout: 10000 });
     if (result.isError) throw new Error("Host denied navigation");
+    opened = true;
+    if (hasUnreadReply(task)) accept(await call("focus_update", { sessionId: id, expectedVersion: task.version, viewedReplySequence: task.replySequence }));
   } catch {
-    chatError = "无法打开聊天，请重试或从 Codex 侧边栏打开对应对话。";
-  } finally { showNotice(); }
+    if (opened) {
+      await update();
+      chatError = "聊天已打开，新回复提示未清除。请刷新后再打开。";
+    } else chatError = "无法打开聊天，请重试或从 Codex 侧边栏打开对应对话。";
+  } finally { actionBusy = false; render(); }
+}
+function renderAddList(): void {
+  if (!addDialog.open) return;
+  const focusId = (document.activeElement as HTMLElement)?.dataset.add;
+  const query = addSearch.value.trim().toLocaleLowerCase();
+  const tasks = snapshot.tasks.filter(task => task.focus === "discovered" && (!query || [task.title, task.project].join(" ").toLocaleLowerCase().includes(query)));
+  element("add-list").innerHTML = tasks.map(task => `<div class="add-row"><div><strong>${escape(task.title)}</strong><span>${escape(task.project)}${!task.titleKnown ? " · 名称待同步" : ""}</span></div><button class="text-control" type="button" data-add="${escape(task.id)}" aria-label="添加：${escape(task.title)}" ${preview || actionBusy ? "disabled" : ""}>添加</button></div>`).join("") || `<p class="empty">${snapshot.revision < 0 ? "正在读取…" : query ? "没有匹配的对话" : "没有可添加的对话"}</p>`;
+  const notice = element("add-notice");
+  notice.textContent = chatError || lastError; notice.hidden = !notice.textContent;
+  if (focusId) {
+    const next = [...element("add-list").querySelectorAll<HTMLButtonElement>("[data-add]")].find(button => button.dataset.add === focusId);
+    (next || addSearch).focus({ preventScroll: true });
+  }
 }
 function todoMessage(message: string, error = false): void {
   todoStatus.textContent = message; todoStatus.dataset.error = String(error);
@@ -209,11 +230,18 @@ element("todo-retry").addEventListener("click", () => {
   element("todo-retry").hidden = true;
   if (!todoLoaded) void loadTodo(); else void saveTodo();
 });
-document.querySelectorAll<HTMLButtonElement>(".scopes [data-scope]").forEach(button => button.addEventListener("click", () => {
-  scope = button.dataset.scope as Scope;
-  document.querySelectorAll<HTMLButtonElement>(".scopes [data-scope]").forEach(control => control.setAttribute("aria-pressed", String(control.dataset.scope === scope)));
-  render();
-}));
+element("add-thread").addEventListener("click", () => {
+  addSearch.value = ""; chatError = "";
+  addDialog.showModal(); renderAddList(); addSearch.focus();
+});
+element("add-close").addEventListener("click", () => addDialog.close());
+addDialog.addEventListener("close", () => element("add-thread").focus());
+addSearch.addEventListener("input", renderAddList);
+element("add-list").addEventListener("click", async event => {
+  const id = (event.target as Element).closest<HTMLButtonElement>("[data-add]")?.dataset.add;
+  const task = snapshot.tasks.find(task => task.id === id);
+  if (task) { await changeFocus(task, "following"); if (addDialog.open) addSearch.focus(); }
+});
 element("search-shortcut").textContent = /Mac/.test(navigator.platform) ? "⌘ K" : "Ctrl K";
 document.addEventListener("keydown", event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && !event.isComposing && todoEditor && (event.target as Element).closest?.(".todo-document")) {
@@ -274,7 +302,6 @@ board.addEventListener("click", event => {
   const task = snapshot.tasks.find(task => task.id === id);
   if (!task) return;
   switch (button.dataset.action) {
-    case "view": void changeFocus(task, undefined, task.replySequence); break;
     case "complete": void changeFocus(task, "done", task.replySequence); break;
     case "follow": case "restore": void changeFocus(task, "following"); break;
     case "later": void changeFocus(task, "later"); break;

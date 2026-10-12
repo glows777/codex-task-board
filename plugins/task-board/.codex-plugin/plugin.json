@@ -1,7 +1,7 @@
 {
   "name": "task-board",
   "version": "0.1.0",
-  "description": "管理关注的 Codex 对话和待查看回复，使用看板和固定笔记区。",
+  "description": "管理跟进的 Codex 对话和新回复，使用看板和固定笔记区。",
   "mcpServers": "./.mcp.json",
   "hooks": "./hooks/hooks.json",
   "interface": {

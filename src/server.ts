@@ -18,7 +18,7 @@ const readOnly = { readOnlyHint: true, destructiveHint: false, openWorldHint: fa
 const result = (value: object) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }], structuredContent: { ...value } });
 
 registerAppTool(server, "board", {
-  title: "我的关注", description: "打开工作台，管理关注的 Codex 对话、待查看回复和个人待办。",
+  title: "我的关注", description: "打开工作台，管理关注的 Codex 对话、新回复和个人待办。",
   inputSchema: z.object({}).strict(), annotations: readOnly,
   _meta: { ui: { resourceUri: uri }, "openai/ui": { entrypoints: [{ type: "global" }] } },
 }, async () => { const namesError = await syncNames(); return result({ ...store.snapshot(), namesError }); });
@@ -27,7 +27,7 @@ registerAppTool(server, "board_snapshot", {
   _meta: { ui: { visibility: ["app"] } },
 }, async () => { const namesError = await syncNames(); return result({ ...store.snapshot(), namesError }); });
 registerAppTool(server, "focus_update", {
-  title: "管理我的关注", description: "保存用户手动设置的关注状态或已查看回复标记，不改变 Codex 对话。",
+  title: "管理我的关注", description: "保存用户手动设置的跟进状态或新回复提示的清除标记，不改变 Codex 对话。",
   inputSchema: z.object({ sessionId: z.string().min(1).max(180), expectedVersion: z.number().int().nonnegative(), state: z.enum(focusStates).optional(), viewedReplySequence: z.number().int().nonnegative().optional() }).strict(),
   annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   _meta: { ui: { visibility: ["app"] } },

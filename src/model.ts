@@ -2,7 +2,8 @@ export const statuses = ["running", "approval", "error", "ended"] as const;
 export type Status = typeof statuses[number];
 export const focusStates = ["discovered", "following", "later", "done"] as const;
 export type FocusState = typeof focusStates[number];
-export const focusLabels: Record<FocusState, string> = { discovered: "新发现", following: "跟进中", later: "稍后", done: "已确认完成" };
+// The persisted discovered value now means outside the board; no history migration is needed.
+export const focusLabels: Record<FocusState, string> = { discovered: "未加入看板", following: "跟进中", later: "稍后", done: "已完成" };
 export const statusLabels: Record<Status, string> = { running: "运行中", approval: "等待批准", error: "异常", ended: "本轮结束" };
 export const hookEvents = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt"] as const;
 export type EventName = typeof hookEvents[number];

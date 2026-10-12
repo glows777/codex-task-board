@@ -7,6 +7,7 @@ const darkStyles = { "--color-background-primary": "#212121", "--color-text-prim
 const bridge = new AppBridge(null, { name: "Official SDK test host", version: "1" }, { serverTools: {}, openLinks: {} }, { hostContext: { theme: "light", styles: { variables: lightStyles }, displayMode: "inline", containerDimensions: { height: 900, maxWidth: 1440 } } });
 bridge.onopenlink = async ({ url }) => {
   document.documentElement.dataset.openedUrl = url;
+  if (document.documentElement.dataset.delayOpen === "true") await fetch("/open");
   return { isError: document.documentElement.dataset.denyOpen === "true" };
 };
 bridge.oncalltool = async params => {
