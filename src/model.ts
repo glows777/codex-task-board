@@ -1,5 +1,8 @@
 export const statuses = ["running", "approval", "error", "ended"] as const;
 export type Status = typeof statuses[number];
+export const focusStates = ["discovered", "following", "later", "done"] as const;
+export type FocusState = typeof focusStates[number];
+export const focusLabels: Record<FocusState, string> = { discovered: "新发现", following: "跟进中", later: "稍后", done: "已完成" };
 export const statusLabels: Record<Status, string> = { running: "运行中", approval: "等待批准", error: "异常", ended: "本轮结束" };
 export const hookEvents = ["SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "Stop", "Interrupt"] as const;
 export type EventName = typeof hookEvents[number];
@@ -13,9 +16,20 @@ export interface Task {
   status: Status; reason: string; activity: string; updatedAt: number;
   approvals: { signature: string; reason: string }[];
   closed: boolean;
+  request?: string;
+  reply?: string;
+}
+export interface FocusTask extends Task {
+  focus: FocusState;
+  version: number;
+  replySequence: number;
+  viewedReplySequence: number;
+  titleKnown: boolean;
 }
 export interface Activity extends Event { sequence: number }
-export interface Snapshot { tasks: Task[]; lastEventAt: number | null; collectedSince: number | null; revision: number }
+export interface Snapshot { tasks: FocusTask[]; lastEventAt: number | null; collectedSince: number | null; revision: number; namesError?: string }
+export const hasUnreadReply = (task: FocusTask): boolean => task.replySequence > task.viewedReplySequence;
+export const needsAction = (task: FocusTask): boolean => hasUnreadReply(task) || task.status === "approval" || (task.status === "running" && task.reason === "等待你回答问题");
 
 export function reduceTask(previous: Task | null, event: Event): Task | null {
   if (event.name === "SessionStart") return previous;
@@ -38,7 +52,8 @@ export function reduceTask(previous: Task | null, event: Event): Task | null {
   switch (event.name) {
     case "UserPromptSubmit":
       task.turnId = event.turnId;
-      task.title = event.summary || "新的 Codex 请求";
+      // Requests are activity, never the identity of a conversation.
+      task.request = event.summary;
       task.approvals = [];
       task.closed = false;
       task.status = "running";
@@ -66,6 +81,7 @@ export function reduceTask(previous: Task | null, event: Event): Task | null {
       if (!task.closed) { task.status = "error"; task.reason = "会话已退出，未观察到本轮结束"; task.approvals = []; task.closed = true; }
       break;
     case "Stop":
+      task.reply = event.summary;
       task.reason = task.status === "error" ? "本轮结束；此前工具返回失败，请查看对话结果" : "本轮回复结束";
       task.status = "ended"; task.approvals = []; task.closed = true;
       break;

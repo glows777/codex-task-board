@@ -18,10 +18,11 @@ try {
   assert.equal(server.toolsError, null, server.toolsError || "");
   assert(server.serverInfo, "MCP initialize did not complete");
   const tools = Object.values(server.tools) as { name: string; _meta?: Record<string, any> }[];
-  assert.equal(tools.length, 5);
+  assert.equal(tools.length, 6);
+  assert(tools.some(tool => tool.name.endsWith("focus_update")));
   assert(tools.some(tool => tool.name.endsWith("todo_read")));
   assert(tools.some(tool => tool.name.endsWith("todo_save")));
   assert(tools.some(tool => tool._meta?.["openai/ui"]?.entrypoints?.some((entry: any) => entry.type === "global")), "Sidebar entrypoint missing");
   assert(server.resources.some((resource: any) => resource.uri === "ui://task-board/dashboard.html"));
-  console.log("Installed MCP: initialize, 5 tools including Todo, global sidebar entrypoint and UI resource passed");
+  console.log("Installed MCP: initialize, 6 tools including focus and Todo, global sidebar entrypoint and UI resource passed");
 } finally { await client.close(); }

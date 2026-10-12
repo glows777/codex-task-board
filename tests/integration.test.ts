@@ -36,6 +36,10 @@ test("built hook process → SQLite → built MCP server → sidebar resource", 
     expect(await hook("Stop")).toBe("");
     const ended = await client.callTool({ name: "board_snapshot", arguments: {} });
     expect(((ended.structuredContent as Record<string, unknown>)?.tasks as {status:string}[])[0].status).toBe("ended");
+    const task = (ended.structuredContent as any).tasks[0];
+    const complete = await client.callTool({ name: "focus_update", arguments: { sessionId: task.id, state: "done", expectedVersion: task.version } });
+    expect((complete.structuredContent as any).tasks[0].focus).toBe("done");
+    expect(tools.tools.find(tool => tool.name === "focus_update")?._meta?.ui).toEqual({ visibility: ["app"] });
     const detail = await client.callTool({ name: "task_detail", arguments: { sessionId: "runtime-session" } });
     expect(((detail.structuredContent as Record<string, unknown>)?.activities as unknown[]).length).toBe(3);
   } finally { await client.close(); }

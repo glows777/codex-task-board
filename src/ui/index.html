@@ -10,41 +10,37 @@
 <body>
   <a class="skip" href="#board">跳到任务看板</a>
   <div class="app">
-    <div class="toolbar">
-      <div class="workspace-title"><h1>工作台</h1><span>任务与个人待办</span></div>
-      <span id="preview" class="preview" hidden>开发预览</span>
-      <span class="toolbar-space"></span>
-      <span id="connection" class="connection" role="status">正在连接</span>
-    </div>
+    <h1 class="sr-only">我的关注</h1>
+    <span id="connection" class="sr-only" role="status">正在连接</span>
     <div id="notice" class="notice" role="status" hidden></div>
     <div class="layout" id="layout">
-      <section class="task-panel" aria-labelledby="tasks-title">
+      <section class="task-panel" aria-label="关注看板">
         <div class="board-controls" id="board-toolbar">
-          <div class="workspace-head"><div><h2 id="tasks-title">Agent 任务</h2><p id="board-summary" role="status">正在读取任务…</p></div><div class="display-modes" aria-label="任务布局"><button id="mode-board" type="button" aria-pressed="true">看板</button><button id="mode-list" type="button" aria-pressed="false">列表</button></div></div>
+          <p id="board-summary" class="sr-only" role="status">正在读取…</p>
           <div class="filter-row">
-            <label class="search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="搜索对话、项目或活动" aria-label="搜索任务或活动" autocomplete="off" /><kbd id="search-shortcut" aria-hidden="true">⌘ K</kbd></label>
+            <label class="search"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="search" type="search" placeholder="搜索对话" aria-label="搜索对话" autocomplete="off" /><kbd id="search-shortcut" aria-hidden="true">⌘ K</kbd></label>
             <select id="project" aria-label="筛选项目"><option value="">所有项目</option></select>
             <label class="auto"><input id="auto" type="checkbox" checked />自动更新</label>
             <button id="refresh" class="control" type="button" aria-label="刷新看板" title="刷新看板"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-1l2 3M18 17a7 7 0 0 1-12 1l-2-3"/></svg></button>
+            <span id="preview" class="preview" hidden>开发预览</span>
           </div>
           <div class="scopes" aria-label="任务筛选">
-            <button id="scope-all" type="button" data-scope="all" aria-pressed="true">全部 <span id="all-count">0</span></button>
-            <button id="scope-attention" type="button" data-scope="attention" aria-pressed="false">等你行动 <span id="attention-count">0</span></button>
-            <button id="scope-ended" type="button" data-scope="ended" aria-pressed="false">本轮结束 <span id="ended-count">0</span></button>
-            <button id="scope-error" type="button" data-scope="error" aria-pressed="false">异常 <span id="error-count">0</span></button>
+            <button id="scope-all" type="button" data-scope="all" aria-pressed="true">全部关注 <span id="all-count">0</span></button>
+            <button id="scope-attention" type="button" data-scope="attention" aria-pressed="false">待我处理 <span id="attention-count">0</span></button>
+            <button id="scope-discovered" type="button" data-scope="discovered" aria-pressed="false">新发现 <span id="discovered-count">0</span></button>
+            <label class="completed-toggle"><input id="show-completed" type="checkbox" /><span id="completed-label">显示已完成</span><span id="done-count" hidden>0</span></label>
           </div>
         </div>
-        <main id="board" class="board" tabindex="-1" aria-label="任务状态看板"></main>
+        <main id="board" class="board" tabindex="-1" aria-label="我的关注看板"></main>
       </section>
-      <section id="todo" class="todo" aria-labelledby="todo-title" data-expanded="false">
-        <div class="todo-head"><h2 id="todo-title">个人待办</h2><button id="todo-expand" class="text-control" type="button" aria-expanded="false" aria-controls="todo-editor">展开</button></div>
+      <section id="todo" class="todo" aria-labelledby="todo-title">
+        <div class="todo-head"><h2 id="todo-title">笔记</h2></div>
         <form id="todo-quick" class="quick-add"><label class="sr-only" for="todo-input">添加个人待办</label><input id="todo-input" type="text" placeholder="记下下一步…" maxlength="1000" autocomplete="off" disabled /><button id="todo-add" type="submit" aria-label="添加待办" disabled>＋</button></form>
         <div class="todo-meta"><span id="todo-status" role="status">正在读取…</span><button id="todo-retry" class="text-control" type="button" hidden>重试</button></div>
-        <div id="todo-checklist" aria-label="未完成的个人待办"></div>
         <div id="todo-editor"></div>
-        <p class="todo-hint">直接勾选或编辑 · 输入 / 插入内容</p>
       </section>
     </div>
+    <div id="undo" class="undo" role="status" hidden><span id="undo-message"></span><button id="undo-button" class="text-control" type="button">撤销</button></div>
   </div>
   <script type="module">__SCRIPT__</script>
 </body>

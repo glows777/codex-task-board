@@ -4,7 +4,7 @@ import { AllSelection } from "prosemirror-state";
 import { zh } from "@blocknote/core/locales";
 import { BlockNoteView } from "@blocknote/mantine";
 import { createRoot } from "react-dom/client";
-import { statusLabels, statuses, type Snapshot, type Task } from "../model.ts";
+import { focusLabels, hasUnreadReply, needsAction, type FocusState, type FocusTask, type Snapshot } from "../model.ts";
 
 const element = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const board = element("board"), notice = element("notice"), connection = element("connection");
@@ -13,12 +13,13 @@ const preview = document.querySelector<HTMLMetaElement>('meta[name="board-mode"]
 let snapshot: Snapshot = { tasks: [], lastEventAt: null, collectedSince: null, revision: -1 };
 let busy = false, connected = false, lastError = "", chatError = "";
 let app: App;
-type Scope = "all" | "attention" | "ended" | "error";
-let scope: Scope = "all", listMode = false;
+type Scope = "all" | "attention" | "discovered";
+let scope: Scope = "all";
+let showCompleted = false, actionBusy = false;
 const taskOrder = new Map<string, number>();
-const needsAnswer = (task: Task) => task.status === "running" && task.reason === "等待你回答问题";
-const needsAction = (task: Task) => task.status === "approval" || needsAnswer(task);
-const todo = element("todo"), todoEditorRoot = element("todo-editor"), todoStatus = element("todo-status");
+const needsAnswer = (task: FocusTask) => task.status === "running" && task.reason === "等待你回答问题";
+const todoEditorRoot = element("todo-editor"), todoStatus = element("todo-status");
+let undoAction: {id:string;state:FocusState} | undefined;
 let todoEditor: BlockNoteEditor | undefined;
 const todoReactRoot = createRoot(todoEditorRoot);
 let todoLoaded = false, todoLoading = false, savedMarkdown = "", currentMarkdown = "";
@@ -29,7 +30,7 @@ const escape = (value: string): string => value.replace(/[&<>"']/g, char => ({ "
 const relative = (at: number) => { const seconds = Math.max(0, Math.floor((Date.now() - at) / 1000)); return seconds < 60 ? "刚刚" : seconds < 3600 ? `${Math.floor(seconds / 60)} 分钟前` : seconds < 86400 ? `${Math.floor(seconds / 3600)} 小时前` : `${Math.floor(seconds / 86400)} 天前`; };
 const date = (at: number) => new Date(at).toLocaleString("zh-CN", { hour12: false });
 function showNotice(): void {
-  notice.textContent = lastError || chatError || (snapshot.tasks.length ? "" : "还没有任务记录。安装并允许插件 hooks 后，在 Codex 对话中发送一条消息，任务会出现在这里。已有对话会从下一次活动开始接入。");
+  notice.textContent = lastError || chatError || snapshot.namesError || (snapshot.tasks.length ? "" : "还没有对话记录。接入 hooks 后，新发现的对话会出现在这里，你可以选择加入关注。");
   notice.hidden = !notice.textContent;
   notice.dataset.error = String(!!lastError || !!chatError);
 }
@@ -37,32 +38,69 @@ function clock(): void {
   board.querySelectorAll<HTMLTimeElement>("time[data-at]").forEach(time => time.textContent = relative(Number(time.dataset.at)));
   connection.textContent = lastError ? "同步中断" : !connected ? "正在连接" : auto.checked ? "自动同步" : "更新已暂停";
   connection.dataset.connected = String(connected && !lastError);
+  auto.parentElement!.title = connection.textContent;
 }
 function render(): void {
-  const focusId = document.activeElement instanceof HTMLElement ? document.activeElement.dataset.task : undefined;
-  const scrolls = new Map([...board.querySelectorAll<HTMLElement>(".column")].map(node => [node.dataset.status, node.querySelector<HTMLElement>(".cards")?.scrollTop || 0]));
+  const focusKey = (document.activeElement as HTMLElement)?.dataset?.control;
+  const scrolls = new Map([...board.querySelectorAll<HTMLElement>(".column")].map(node => [node.dataset.focus, node.querySelector<HTMLElement>(".cards")?.scrollTop || 0]));
   const query = search.value.trim().toLocaleLowerCase();
-  const matching = snapshot.tasks.filter(task => (!project.value || task.cwd === project.value) && (!query || [task.title, task.project, task.reason, task.activity].join(" ").toLocaleLowerCase().includes(query)));
-  const counts = { all: matching.length, attention: matching.filter(needsAction).length, ended: matching.filter(task => task.status === "ended").length, error: matching.filter(task => task.status === "error").length };
+  const matching = snapshot.tasks.filter(task => (!project.value || task.cwd === project.value) && (!query || [task.title, task.request, task.reply, task.project, task.reason].join(" ").toLocaleLowerCase().includes(query)));
+  const followed = matching.filter(task => task.focus === "following" || task.focus === "later");
+  const counts = { all: followed.length, attention: followed.filter(needsAction).length, discovered: matching.filter(task => task.focus === "discovered").length, done: matching.filter(task => task.focus === "done").length };
   Object.entries(counts).forEach(([key, count]) => { element(`${key}-count`).textContent = String(count); });
-  const visible = matching.filter(task => scope === "all" || (scope === "attention" ? needsAction(task) : task.status === scope)).sort((a, b) => taskOrder.get(a.id)! - taskOrder.get(b.id)!);
-  element("board-summary").textContent = snapshot.revision < 0 ? "正在读取任务…" : `${counts.attention ? `${counts.attention} 个对话等你行动` : "暂无对话等你行动"} · 本轮结束不代表任务完成`;
-  board.dataset.layout = listMode ? "list" : "board";
+  const doneUnread = matching.filter(task => task.focus === "done" && hasUnreadReply(task)).length;
+  element("completed-label").textContent = `显示已完成${counts.done ? ` (${counts.done})` : ""}${doneUnread ? ` · ${doneUnread} 个有新回复` : ""}`;
+  matching.sort((a, b) => taskOrder.get(a.id)! - taskOrder.get(b.id)!);
+  element("board-summary").textContent = snapshot.revision < 0 ? "正在读取…" : counts.all ? `${counts.all} 个关注的对话${counts.attention ? ` · ${counts.attention} 个待处理` : ""}` : "把需要继续跟进的对话加入关注";
+  board.dataset.layout = "board";
   board.dataset.scope = scope;
-  board.innerHTML = statuses.map((status, index) => {
-    const tasks = visible.filter(task => task.status === status);
-    if (scope !== "all" && !tasks.length) return "";
-    return `<section class="column" data-status="${status}" data-empty="${!tasks.length}" aria-labelledby="column-${status}"><div class="column-head"><span class="status-dot" aria-hidden="true"></span><h2 id="column-${status}">${statusLabels[status]}</h2><span class="count">${tasks.length}</span></div><div class="cards">${tasks.map(task => {
-      const waiting = needsAction(task);
-      const state = task.status === "approval" ? "等你批准" : needsAnswer(task) ? "等你回答" : task.status === "error" ? task.closed ? "已中断 / 退出" : "工具返回失败" : "";
-      const action = task.status === "approval" ? "查看批准" : needsAnswer(task) ? "回答问题" : task.status === "ended" ? "查看回复" : task.status === "error" ? "查看异常" : "继续对话";
-      const context = task.status === "ended" && task.activity ? task.activity : task.reason;
-      return `<button type="button" class="card" data-task="${escape(task.id)}" data-needs-action="${waiting}" title="${escape(task.title)}" aria-label="${action}：${escape(task.title)}"><span class="card-top"><span class="project-chip" title="${escape(task.cwd)}">${escape(task.project)}</span>${state ? `<span class="card-state">${state}</span>` : ""}</span><span class="card-title">${escape(task.title)}</span><span class="card-reason" title="${escape(context)}">${escape(context)}</span><span class="card-meta"><time data-at="${task.updatedAt}" datetime="${new Date(task.updatedAt).toISOString()}" title="${escape(date(task.updatedAt))}">${relative(task.updatedAt)}</time><span class="open-chat" aria-hidden="true">${action} ↗</span></span></button>`;
-    }).join("") || `<div class="empty">${query || project.value ? "没有匹配的任务" : ["交给 Agent，进展会出现在这里", "暂无批准请求", "暂无异常记录", "暂无结束记录"][index]}</div>`}</div></section>`;
-  }).join("") || `<div class="board-empty"><strong>${scope === "attention" && !query && !project.value ? "暂时没有对话等你行动" : "没有匹配的对话"}</strong><span>${scope === "attention" ? "批准或回答请求出现时，会汇集在这里。" : "可以切换筛选，或等待下一次对话活动。"}</span></div>`;
-  board.querySelectorAll<HTMLElement>(".column").forEach(node => { node.querySelector<HTMLElement>(".cards")!.scrollTop = scrolls.get(node.dataset.status) || 0; });
-  if (focusId) [...board.querySelectorAll<HTMLButtonElement>("[data-task]")].find(button => button.dataset.task === focusId)?.focus({ preventScroll: true });
+  const groups: FocusState[] = scope === "discovered" ? ["discovered"] : ["following", "later", ...(showCompleted ? ["done" as const] : [])];
+  const sections = groups.map(group => {
+    const tasks = matching.filter(task => task.focus === group && (scope !== "attention" || needsAction(task)));
+    return `<section class="column" data-focus="${group}" data-empty="${!tasks.length}" aria-labelledby="column-${group}"><div class="column-head"><h2 id="column-${group}">${focusLabels[group]}</h2><span class="count">${tasks.length}</span></div><div class="cards"><div class="thread-cards">${tasks.map(task => {
+      const unread = hasUnreadReply(task);
+      const state = task.status === "approval" ? "等你批准" : needsAnswer(task) ? "等你回答" : task.status === "running" ? "运行中" : task.status === "error" ? task.closed ? "已中断" : "工具失败" : unread ? "待查看" : "回复已查看";
+      const context = task.reply && (unread || task.status === "ended") ? task.reply : task.request || task.reason;
+      const disabled = preview || actionBusy ? "disabled" : "";
+      const control = (action: string, text: string) => `<button type="button" data-action="${action}" data-control="${escape(task.id)}-${action}" ${disabled}>${text}</button>`;
+      return `<article class="card" data-task="${escape(task.id)}" data-status="${task.status}" data-unread="${unread}" data-needs-action="${needsAction(task)}"><div class="card-content"><div class="card-top"><span class="project-chip" title="${escape(task.cwd)}">${escape(task.project)}</span><span class="card-state">${state}</span>${unread && task.status !== "ended" ? '<span class="unread-label">新回复待查看</span>' : ""}</div><button type="button" class="card-title" data-open="${escape(task.id)}" data-control="${escape(task.id)}-open" title="${escape(task.title)}">${escape(task.title)}</button>${!task.titleKnown ? '<span class="name-pending">名称待同步</span>' : ""}<p class="card-reason" title="${escape(context)}">${escape(context)}</p><div class="card-meta"><time data-at="${task.updatedAt}" datetime="${new Date(task.updatedAt).toISOString()}" title="${escape(date(task.updatedAt))}">${relative(task.updatedAt)}</time><span class="card-actions">${group === "discovered" ? control("follow", "加入关注") : group === "done" ? control("restore", "恢复关注") : `${unread ? control("view", "标记已查看") : ""}${control(group === "later" ? "follow" : "later", group === "later" ? "继续跟进" : "稍后")}${control("unfollow", "取消关注")}`}</span></div></div>${group !== "discovered" && group !== "done" ? `<button type="button" class="complete-task" data-action="complete" data-control="${escape(task.id)}-complete" aria-label="确认完成：${escape(task.title)}" title="确认完成" ${disabled}><span class="completion-circle" aria-hidden="true"></span></button>` : ""}</article>`;
+    }).join("")}${!tasks.length && group !== "following" ? `<p class="empty">${group === "discovered" ? "没有新发现的对话" : group === "done" ? "已完成的事项会留在这里" : "稍后再处理的对话放在这里"}</p>` : ""}</div></div></section>`;
+  }).join("");
+  const parsed = document.createElement("template"); parsed.innerHTML = sections;
+  const groupKey = [...parsed.content.querySelectorAll<HTMLElement>(".column")].map(node => node.dataset.focus).join(",");
+  if (board.dataset.groups !== groupKey) {
+    board.innerHTML = sections; board.dataset.groups = groupKey;
+  } else {
+    parsed.content.querySelectorAll<HTMLElement>(".column").forEach(next => {
+      const current = board.querySelector<HTMLElement>(`[data-focus="${next.dataset.focus}"]`)!;
+      current.dataset.empty = next.dataset.empty;
+      current.querySelector(".thread-cards")!.innerHTML = next.querySelector(".thread-cards")!.innerHTML;
+      current.querySelector(".count")!.textContent = next.querySelector(".count")!.textContent;
+    });
+  }
+  const following = board.querySelector<HTMLElement>('[data-focus="following"] .cards');
+  if (following) {
+    if (!followed.length || (scope === "attention" && !counts.attention)) following.querySelector(".thread-cards")!.insertAdjacentHTML("beforeend", `<div class="board-empty"><strong>${scope === "attention" ? "关注的对话暂无待处理事项" : "还没有关注的对话"}</strong><span>${scope === "attention" ? "新回复、批准和回答请求会出现在这里。" : counts.discovered ? "从新发现中选择你想继续跟进的对话。" : "接入后的对话会先出现在新发现中。"}</span></div>`);
+  }
+  board.querySelectorAll<HTMLElement>(".column").forEach(node => { node.querySelector<HTMLElement>(".cards")!.scrollTop = scrolls.get(node.dataset.focus) || 0; });
+  if (focusKey) [...board.querySelectorAll<HTMLElement>("[data-control]")].find(node => node.dataset.control === focusKey)?.focus({ preventScroll: true });
   clock(); showNotice();
+}
+function showUndo(message: string): void {
+  element("undo-message").textContent = message;
+  element("undo").hidden = false;
+}
+async function changeFocus(task: FocusTask, state?: FocusState, viewedReplySequence?: number, allowUndo = true): Promise<void> {
+  if (preview || actionBusy) return;
+  actionBusy = true; chatError = ""; render();
+  try {
+    const value = await call("focus_update", { sessionId: task.id, expectedVersion: task.version, ...(state ? { state } : {}), ...(viewedReplySequence !== undefined ? { viewedReplySequence } : {}) });
+    accept(value);
+    if (state && allowUndo) { undoAction = { id: task.id, state: task.focus }; showUndo(state === "done" ? "已移到已完成" : state === "discovered" ? "已取消关注" : state === "later" ? "已移到稍后" : "已加入关注"); }
+  } catch (error) {
+    await update();
+    chatError = `未保存。${error instanceof Error ? error.message : "请重试"}`;
+  } finally { actionBusy = false; render(); }
 }
 async function call(name: string, args: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   if (preview) {
@@ -120,36 +158,10 @@ function renderTodoEditor(): void {
     theme={document.documentElement.dataset.theme === "dark" ? "dark" : "light"}
     onChange={() => {
       currentMarkdown = todoEditor!.blocksToMarkdownLossy(todoEditor!.document);
-      renderTodoChecklist();
       scheduleTodoSave();
     }}
   />);
-  renderTodoChecklist();
 }
-function renderTodoChecklist(): void {
-  if (!todoEditor) return;
-  const checklist = element("todo-checklist");
-  const focusId = (document.activeElement as HTMLInputElement)?.dataset?.block;
-  const items: { id: string; text: string; checked: boolean }[] = [];
-  const documentBlocks = todoEditor.document;
-  const collect = (blocks: typeof documentBlocks): void => {
-    for (const block of blocks) {
-      if (block.type === "checkListItem") items.push({ id: block.id, checked: block.props.checked, text: todoEditor!.blocksToMarkdownLossy([{ ...block, children: [] }]).replace(/^[*+-] \[[ xX]\]\s*/, "").trim() || "未命名待办" });
-      if (block.children.length) collect(block.children);
-    }
-  };
-  collect(documentBlocks);
-  const pending = items.filter(item => !item.checked);
-  checklist.innerHTML = pending.slice(0, 3).map(item => `<label class="todo-item"><input type="checkbox" data-block="${escape(item.id)}" aria-label="完成待办：${escape(item.text)}" ${preview ? "disabled" : ""}/><span>${escape(item.text)}</span></label>`).join("") + `<p class="todo-count">${pending.length > 3 ? `还有 ${pending.length - 3} 项未完成，展开查看` : pending.length ? `${pending.length} 项未完成` : items.length ? "清单已全部勾选" : "暂无待办，记下你的下一步"}${items.some(item => item.checked) ? ` · 已勾选 ${items.filter(item => item.checked).length} 项` : ""}</p>`;
-  if (focusId) (checklist.querySelector<HTMLInputElement>(`[data-block="${CSS.escape(focusId)}"]`) || checklist.querySelector<HTMLInputElement>("input") || element<HTMLInputElement>("todo-input")).focus({ preventScroll: true });
-}
-element("todo-checklist").addEventListener("change", event => {
-  const input = event.target as HTMLInputElement;
-  if (!todoEditor || preview || !input.dataset.block) return;
-  todoEditor.updateBlock(input.dataset.block, { props: { checked: input.checked } });
-  currentMarkdown = todoEditor.blocksToMarkdownLossy(todoEditor.document);
-  renderTodoChecklist(); scheduleTodoSave();
-});
 function followHostTheme(context: McpUiHostContext): void {
   if (context.styles?.variables) applyHostStyleVariables(context.styles.variables);
   if (context.theme) applyDocumentTheme(context.theme);
@@ -164,7 +176,7 @@ async function loadTodo(): Promise<void> {
     savedMarkdown = currentMarkdown = value.markdown;
     todoEditor = BlockNoteEditor.create({
       dictionary: zh,
-      domAttributes: { editor: { class: "todo-document", role: "textbox", "aria-label": "Todo 正文", "aria-multiline": "true", "aria-readonly": String(preview) } },
+      domAttributes: { editor: { class: "todo-document", role: "textbox", "aria-label": "笔记正文", "aria-multiline": "true", "aria-readonly": String(preview) } },
     });
     const blocks = todoEditor.tryParseMarkdownToBlocks(savedMarkdown);
     if (blocks.length) todoEditor.replaceBlocks(todoEditor.document, blocks);
@@ -186,7 +198,6 @@ element("todo-quick").addEventListener("submit", event => {
   if (todoEditor.document.length === 1 && last.type === "paragraph" && Array.isArray(last.content) && !last.content.length) todoEditor.replaceBlocks([last], [block]);
   else todoEditor.insertBlocks([block], last, "after");
   currentMarkdown = todoEditor.blocksToMarkdownLossy(todoEditor.document);
-  renderTodoChecklist();
   scheduleTodoSave();
   input.value = "";
   input.focus();
@@ -194,13 +205,6 @@ element("todo-quick").addEventListener("submit", event => {
 });
 element("todo-input").addEventListener("compositionstart", () => { quickComposing = true; });
 element("todo-input").addEventListener("compositionend", () => { quickComposing = false; });
-element("todo-expand").addEventListener("click", () => {
-  const expanded = todo.dataset.expanded !== "true";
-  todo.dataset.expanded = String(expanded);
-  element("todo-expand").setAttribute("aria-expanded", String(expanded));
-  element("todo-expand").textContent = expanded ? "收起" : "展开";
-  if (!expanded) void saveTodo();
-});
 element("todo-retry").addEventListener("click", () => {
   element("todo-retry").hidden = true;
   if (!todoLoaded) void loadTodo(); else void saveTodo();
@@ -210,14 +214,6 @@ document.querySelectorAll<HTMLButtonElement>(".scopes [data-scope]").forEach(but
   document.querySelectorAll<HTMLButtonElement>(".scopes [data-scope]").forEach(control => control.setAttribute("aria-pressed", String(control.dataset.scope === scope)));
   render();
 }));
-function setLayout(value: boolean): void {
-  listMode = value;
-  element("mode-board").setAttribute("aria-pressed", String(!value));
-  element("mode-list").setAttribute("aria-pressed", String(value));
-  render();
-}
-element("mode-board").addEventListener("click", () => setLayout(false));
-element("mode-list").addEventListener("click", () => setLayout(true));
 element("search-shortcut").textContent = /Mac/.test(navigator.platform) ? "⌘ K" : "Ctrl K";
 document.addEventListener("keydown", event => {
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a" && !event.isComposing && todoEditor && (event.target as Element).closest?.(".todo-document")) {
@@ -269,7 +265,30 @@ todoEditorRoot.addEventListener("click", async event => {
 search.addEventListener("input", render); project.addEventListener("change", render);
 auto.addEventListener("change", () => { clock(); if (auto.checked) void update(); });
 refresh.addEventListener("click", () => void update());
-board.addEventListener("click", event => { const button = (event.target as Element).closest<HTMLButtonElement>("[data-task]"); if (button?.dataset.task) void openChat(button.dataset.task); });
+element<HTMLInputElement>("show-completed").addEventListener("change", event => { showCompleted = (event.target as HTMLInputElement).checked; render(); });
+board.addEventListener("click", event => {
+  const button = (event.target as Element).closest<HTMLButtonElement>("button");
+  if (!button) return;
+  if (button.dataset.open) { void openChat(button.dataset.open); return; }
+  const id = button.closest<HTMLElement>("[data-task]")?.dataset.task;
+  const task = snapshot.tasks.find(task => task.id === id);
+  if (!task) return;
+  switch (button.dataset.action) {
+    case "view": void changeFocus(task, undefined, task.replySequence); break;
+    case "complete": void changeFocus(task, "done", task.replySequence); break;
+    case "follow": case "restore": void changeFocus(task, "following"); break;
+    case "later": void changeFocus(task, "later"); break;
+    case "unfollow": void changeFocus(task, "discovered"); break;
+  }
+});
+element("undo-button").addEventListener("click", async () => {
+  if (!undoAction || actionBusy) return;
+  const action = undoAction;
+  const task = snapshot.tasks.find(task => task.id === action.id);
+  if (task) await changeFocus(task, action.state, undefined, false);
+  if (chatError) return;
+  undoAction = undefined; element("undo").hidden = true;
+});
 document.addEventListener("visibilitychange", () => { if (document.hidden) void saveTodo(); else if (auto.checked) void update(); });
 render();
 try {

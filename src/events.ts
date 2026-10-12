@@ -14,7 +14,11 @@ export function toolFailed(response: unknown): boolean {
   return result.isError === true || (typeof result.exit_code === "number" && result.exit_code !== 0);
 }
 export function isBoardTool(value: unknown): boolean {
-  return typeof value === "string" && /^mcp__task[-_]board__(?:board|board_snapshot|task_detail|todo_read|todo_save)$/.test(value);
+  return typeof value === "string" && /^mcp__task[-_]board__(?:board|board_snapshot|task_detail|focus_update|todo_read|todo_save)$/.test(value);
+}
+// Match the observed app envelope, not English text or a user's ordinary request.
+export function isGeneratedPrompt(prompt: string): boolean {
+  return prompt.startsWith("This is an app-generated request for a suggested next user message.") && prompt.includes("The user did not write this message.");
 }
 export function normalizeEvent(value: unknown, at = Date.now()): Event {
   const input = object(value);
